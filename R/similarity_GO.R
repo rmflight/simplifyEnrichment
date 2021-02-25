@@ -61,6 +61,90 @@ GO_similarity = function(go_id, ont, db = 'org.Hs.eg.db', measure = "Rel") {
 	return(go_sim)
 }
 
+GOPar_similarity = function (go_id, ont, db = "org.Hs.eg.db", measure = "Rel") {
+  if (missing(ont)) {
+    ont = guess_ont(go_id, db)
+    if (is.null(ont)) {
+      stop("You need to specify the ontology by `ont`.")
+    }
+    else {
+      message(qq("You haven't provided value for `ont`, guess it as `@{ont}`."))
+    }
+  }
+  hash = digest::digest(list(ont = ont, db = db))
+  if (hash == env$semData_hash) {
+    semData = env$semData
+  }
+  else {
+    suppressMessages(semData <- godata(db, ont = ont))
+    env$semData_hash = hash
+    env$semData = semData
+  }
+  go_removed = setdiff(go_id, Lkeys(getFromNamespace("getAncestors",
+                                                     "GOSemSim")(semData@ont)))
+  if (length(go_removed)) {
+    message(qq("@{length(go_removed)}/@{length(go_id)} GO ID@{ifelse(length(go_removed) == 1, ' is', 's are')} removed."))
+  }
+  go_id = setdiff(go_id, go_removed)
+
+  n_sample = length(go_id)
+  pairwise_comparisons = combn(n_sample, 2)
+  self_comparisons = matrix(rep(seq(1, n_sample), each = 2), nrow = 2, ncol = n_sample, byrow = FALSE)
+  pairwise_comparisons = cbind(pairwise_comparisons, self_comparisons)
+
+  n_todo = ncol(pairwise_comparisons)
+  ncore = future::nbrOfWorkers()
+  names(ncore) = NULL
+
+  n_each = ceiling(n_todo / ncore)
+
+  split_comparisons = vector("list", ncore)
+  start_loc = 1
+
+  for (isplit in seq_along(split_comparisons)) {
+    stop_loc = min(start_loc + n_each, n_todo)
+
+    split_comparisons[[isplit]] = pairwise_comparisons[, start_loc:stop_loc, drop = FALSE]
+    start_loc = stop_loc + 1
+
+    if (start_loc > n_todo) {
+      break()
+    }
+  }
+  null_comparisons = purrr::map_lgl(split_comparisons, is.null)
+  split_comparisons = split_comparisons[!null_comparisons]
+
+  do_split = function(do_comparisons, go_id, method, semData) {
+    #seq_range = seq(in_range[1], in_range[2])
+    #print(seq_range)
+    #full_sim = matrix(0, nrow = length(go_id), ncol = length(go_id))
+    #rownames(full_sim) = colnames(full_sim) = go_id
+
+    tmp_sim = GOSemSim::termSim(go_id[do_comparisons[1, ]],
+                                 go_id[do_comparisons[2, ]],
+                                 method = method, semData = semData)
+    tmp_sim[is.na(tmp_sim)] = 0
+    tmp_sim
+  }
+
+  go_comps = furrr::future_map(split_comparisons, do_split, go_id, measure, semData)
+  all_sim = matrix(0, nrow = length(go_id), ncol = length(go_id))
+  rownames(all_sim) = colnames(all_sim) = go_id
+  for (icomp in go_comps) {
+    for (irow in rownames(icomp)) {
+      for (icol in colnames(icomp)) {
+        all_sim[irow, icol] = icomp[irow, icol]
+      }
+    }
+  }
+  all_sim[is.na(all_sim)] = 0
+  all_sim[lower.tri(all_sim)] = t(all_sim)[lower.tri(all_sim)]
+
+  attr(all_sim, "measure") = measure
+  attr(all_sim, "ontology") = "GO"
+  return(all_sim)
+}
+
 
 split_by_block = function(n, size) {
 	size = min(c(n, size))
