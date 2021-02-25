@@ -1,5 +1,6 @@
 S3method("heightDetails", "word_cloud")
 export("heightDetails.word_cloud")
+export("GOPar_similarity")
 S3method("widthDetails", "word_cloud")
 export("widthDetails.word_cloud")
 export("DO_similarity")
